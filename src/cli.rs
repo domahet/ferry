@@ -1,4 +1,3 @@
-// src/cli.rs
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -54,5 +53,15 @@ pub enum Commands {
         /// Overwrite existing files without prompting.
         #[arg(short = 'f', long)]
         force: bool, 
+    },
+    /// List currently selected files
+    List {
+        /// Display paths as absolute paths (default).
+        #[arg(long, default_value_t = false, conflicts_with = "relative")]
+        absolute: bool,
+
+        /// Display paths relative to the current working directory.
+        #[arg(long, default_value_t = false, conflicts_with = "absolute")]
+        relative: bool,
     },
 }

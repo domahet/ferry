@@ -1,4 +1,3 @@
-// src/operations.rs
 use super::selection_store;
 use std::fs;
 use crate::config::Config;
@@ -10,7 +9,7 @@ pub fn handle_copy_command(force: bool, config: &Config) -> Result<(), String> {
         return Ok(());
     }
 
-    config.print_normal(&format!("Copying {} selected items)", paths.len()));
+    config.print_normal(&format!("Copying {} selected items", paths.len()));
 
     let current_dir = std::env::current_dir()
         .map_err(|e| format!("Failed to get current directory: {}", e))?;
@@ -55,7 +54,7 @@ pub fn handle_move_command(force: bool, config: &Config) -> Result<(), String> {
         return Ok(());
     }
 
-    config.print_normal(&format!("Moving {} selected items)", paths.len()));
+    config.print_normal(&format!("Moving {} selected items", paths.len()));
 
     let current_dir = std::env::current_dir()
         .map_err(|e| format!("Failed to get current directory: {}", e))?;
@@ -97,5 +96,30 @@ pub fn handle_move_command(force: bool, config: &Config) -> Result<(), String> {
 
     selection_store::clear_selection_file()?;
     config.print_normal("Move complete. Selection cleared.");
+    Ok(())
+}
+
+pub fn handle_list_command(_absolute: bool, relative: bool, config: &Config) -> Result<(), String> {
+    let paths = selection_store::read_selected_paths()?;
+
+    if paths.is_empty() {
+        config.print_normal("No files currently selected.");
+    } else {
+        config.print_normal("Currently selected files:");
+        let current_dir = std::env::current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?;
+
+        for path in paths {
+            let display_path = if relative {
+                path.strip_prefix(&current_dir)
+                    .unwrap_or(&path) 
+                    .display()
+                    .to_string()
+            } else {
+                path.display().to_string()
+            };
+            config.print_normal(&format!("  {}", display_path));
+        }
+    }
     Ok(())
 }
