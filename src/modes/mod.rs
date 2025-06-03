@@ -42,10 +42,9 @@ pub fn handle_select_command(
         }
 
         if items.is_empty() {
-            config.print_normal("No arguments provided. Launching interactive TUI from current directory.");
-            interactive::run_tui_selection(&PathBuf::from("."), config)? // Pass config
+            interactive::run_tui_selection(&PathBuf::from("."), config)?
         } else {
-            config.print_normal(&format!("Selected {} items directly (shell-expanded). (dry_run: {})", items.len(), dry_run));
+            config.print_normal(&format!("Selected {} items directly)", items.len()));
             explicit::validate_and_canonicalize_items(&items, config)?
         }
     };
