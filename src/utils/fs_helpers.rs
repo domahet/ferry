@@ -1,6 +1,8 @@
-use std::path::{Path, PathBuf};
 
-pub fn canonicalize_path(input_path: &Path) -> Result<Option<PathBuf>, String> {
+use std::path::{Path, PathBuf};
+use crate::config::Config;
+
+pub fn canonicalize_path(input_path: &Path, config: &Config) -> Result<Option<PathBuf>, String> {
     let resolved_path = if input_path.is_absolute() {
         input_path.to_path_buf()
     } else {
@@ -10,7 +12,7 @@ pub fn canonicalize_path(input_path: &Path) -> Result<Option<PathBuf>, String> {
     };
 
     if !resolved_path.exists() {
-        eprintln!("Warning: Path '{}' does not exist or is inaccessible. Skipping.", resolved_path.display());
+        config.print_warning(&format!("Path '{}' does not exist or is inaccessible. Skipping.", resolved_path.display()));
         return Ok(None);
     }
 

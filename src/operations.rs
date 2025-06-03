@@ -1,14 +1,16 @@
+// src/operations.rs
 use super::selection_store;
 use std::fs;
+use crate::config::Config;
 
-pub fn handle_copy_command(force: bool) -> Result<(), String> {
+pub fn handle_copy_command(force: bool, config: &Config) -> Result<(), String> {
     let paths = selection_store::read_selected_paths()?;
     if paths.is_empty() {
-        println!("No items selected. Run 'ferry select' first.");
+        config.print_normal("No items selected. Run 'ferry select' first.");
         return Ok(());
     }
 
-    println!("Copying {} selected items", paths.len());
+    config.print_normal(&format!("Copying {} selected items)", paths.len()));
 
     let current_dir = std::env::current_dir()
         .map_err(|e| format!("Failed to get current directory: {}", e))?;
@@ -26,7 +28,7 @@ pub fn handle_copy_command(force: bool) -> Result<(), String> {
                     destination_path.display()
                 ));
             } else {
-                println!("Overwriting existing file: {}", destination_path.display());
+                config.print_normal(&format!("Overwriting existing file: {}", destination_path.display()));
             }
         }
 
@@ -38,22 +40,22 @@ pub fn handle_copy_command(force: bool) -> Result<(), String> {
                 e
             ))?;
 
-        println!("Copied '{}' to '{}'", source_path.display(), destination_path.display());
+        config.print_normal(&format!("Copied '{}' to '{}'", source_path.display(), destination_path.display()));
     }
 
     selection_store::clear_selection_file()?;
-    println!("Copy complete. Selection cleared.");
+    config.print_normal("Copy complete. Selection cleared.");
     Ok(())
 }
 
-pub fn handle_move_command(force: bool) -> Result<(), String> {
+pub fn handle_move_command(force: bool, config: &Config) -> Result<(), String> {
     let paths = selection_store::read_selected_paths()?;
     if paths.is_empty() {
-        println!("No items selected. Run 'ferry select' first.");
+        config.print_normal("No items selected. Run 'ferry select' first.");
         return Ok(());
     }
 
-    println!("Moving {} selected items", paths.len());
+    config.print_normal(&format!("Moving {} selected items)", paths.len()));
 
     let current_dir = std::env::current_dir()
         .map_err(|e| format!("Failed to get current directory: {}", e))?;
@@ -71,7 +73,7 @@ pub fn handle_move_command(force: bool) -> Result<(), String> {
                     destination_path.display()
                 ));
             } else {
-                println!("Overwriting existing file: {}", destination_path.display());
+                config.print_normal(&format!("Overwriting existing file: {}", destination_path.display()));
                 if destination_path.is_file() {
                     fs::remove_file(&destination_path)
                         .map_err(|e| format!("Failed to remove existing file '{}' before move: {}", destination_path.display(), e))?;
@@ -90,10 +92,10 @@ pub fn handle_move_command(force: bool) -> Result<(), String> {
                 e
             ))?;
 
-        println!("Moved '{}' to '{}'", source_path.display(), destination_path.display());
+        config.print_normal(&format!("Moved '{}' to '{}'", source_path.display(), destination_path.display()));
     }
 
     selection_store::clear_selection_file()?;
-    println!("Move complete. Selection cleared.");
+    config.print_normal("Move complete. Selection cleared.");
     Ok(())
 }

@@ -1,3 +1,4 @@
+// src/cli.rs
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -5,6 +6,14 @@ use clap::{Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
+
+    /// Suppress all output to stdout. Only errors will be printed to stderr.
+    #[arg(long, default_value_t = false, conflicts_with = "verbose")]
+    pub silent: bool,
+
+    /// Print all available information, including file names during selection.
+    #[arg(long, default_value_t = false, conflicts_with = "silent")]
+    pub verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -47,4 +56,3 @@ pub enum Commands {
         force: bool, 
     },
 }
-
