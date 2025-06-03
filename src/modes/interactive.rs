@@ -125,25 +125,25 @@ fn run_app<B: ratatui::backend::Backend>(
 
             for i in visible_start..visible_end {
                 if let Some(path) = app_state.items.get(i) {
-                    let mut s = path.display().to_string();
+                    let mut _s = path.display().to_string();
                     if let Some(stripped_path) = path.strip_prefix(app_state.items[0].parent().unwrap_or(path))
                         .ok().and_then(|p| if p.as_os_str().is_empty() { None } else { Some(p) }) {
-                        s = stripped_path.display().to_string();
+                        _s = stripped_path.display().to_string();
                     } else { 
-                        s = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned();
+                        _s = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned();
                     }
 
                     if app_state.selected_indices.contains(&i) {
-                        s = format!("[x] {}", s);
+                        _s = format!("[x] {}", _s);
                     } else {
-                        s = format!("[ ] {}", s);
+                        _s = format!("[ ] {}", _s);
                     }
                     if i == app_state.current_scroll_index {
-                        s = format!("> {}", s);
+                        _s = format!("> {}", _s);
                     } else {
-                        s = format!("  {}", s);
+                        _s = format!("  {}", _s);
                     }
-                    list_items.push(ListItem::new(s));
+                    list_items.push(ListItem::new(_s));
                 }
             }
 
