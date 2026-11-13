@@ -1,102 +1,252 @@
 use super::selection_store;
+use std::collections::HashMap;
 use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use crate::config::Config;
 
-pub fn handle_copy_command(force: bool, config: &Config) -> Result<(), String> {
-    let paths = selection_store::read_selected_paths()?;
-    if paths.is_empty() {
-        config.print_normal("No items selected. Run 'ferry select' first.");
-        return Ok(());
-    }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Copy,
+    Move,
+}
 
-    config.print_normal(&format!("Copying {} selected items", paths.len()));
-
-    let current_dir = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {}", e))?;
-
-    for source_path in &paths {
-        let file_name = source_path.file_name()
-            .ok_or_else(|| format!("Invalid source path: {}", source_path.display()))?;
-
-        let destination_path = current_dir.join(file_name);
-
-        if destination_path.exists() {
-            if !force {
-                return Err(format!(
-                    "Destination file '{}' already exists. Use --force to overwrite.",
-                    destination_path.display()
-                ));
-            } else {
-                config.print_normal(&format!("Overwriting existing file: {}", destination_path.display()));
-            }
+impl Mode {
+    fn verb(self) -> &'static str {
+        match self {
+            Mode::Copy => "copy",
+            Mode::Move => "move",
         }
-
-        fs::copy(source_path, &destination_path)
-            .map_err(|e| format!(
-                "Failed to copy '{}' to '{}': {}",
-                source_path.display(),
-                destination_path.display(),
-                e
-            ))?;
-
-        config.print_normal(&format!("Copied '{}' to '{}'", source_path.display(), destination_path.display()));
     }
 
-    selection_store::clear_selection_file()?;
-    config.print_normal("Copy complete. Selection cleared.");
-    Ok(())
+    fn gerund(self) -> &'static str {
+        match self {
+            Mode::Copy => "Copying",
+            Mode::Move => "Moving",
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Mode::Copy => "Copy",
+            Mode::Move => "Move",
+        }
+    }
+
+    fn past(self) -> &'static str {
+        match self {
+            Mode::Copy => "Copied",
+            Mode::Move => "Moved",
+        }
+    }
+}
+
+pub fn handle_copy_command(force: bool, config: &Config) -> Result<(), String> {
+    transfer(Mode::Copy, force, config)
 }
 
 pub fn handle_move_command(force: bool, config: &Config) -> Result<(), String> {
+    transfer(Mode::Move, force, config)
+}
+
+pub fn plural(n: usize, word: &str) -> String {
+    if n == 1 { format!("{} {}", n, word) } else { format!("{} {}s", n, word) }
+}
+
+fn transfer(mode: Mode, force: bool, config: &Config) -> Result<(), String> {
     let paths = selection_store::read_selected_paths()?;
     if paths.is_empty() {
         config.print_normal("No items selected. Run 'ferry select' first.");
         return Ok(());
     }
 
-    config.print_normal(&format!("Moving {} selected items", paths.len()));
-
     let current_dir = std::env::current_dir()
         .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let current_dir = current_dir.canonicalize().unwrap_or(current_dir);
 
-    for source_path in &paths {
-        let file_name = source_path.file_name()
-            .ok_or_else(|| format!("Invalid source path: {}", source_path.display()))?;
+    // Validate everything up front so a problem with one item never leaves
+    // the transfer half done.
+    let plan = plan_transfer(&paths, &current_dir, force)?;
 
-        let destination_path = current_dir.join(file_name);
+    config.print_normal(&format!("{} {}", mode.gerund(), plural(plan.len(), "selected item")));
 
-        if destination_path.exists() {
-            if !force {
-                return Err(format!(
-                    "Destination file '{}' already exists. Use --force to overwrite.",
-                    destination_path.display()
-                ));
-            } else {
-                config.print_normal(&format!("Overwriting existing file: {}", destination_path.display()));
-                if destination_path.is_file() {
-                    fs::remove_file(&destination_path)
-                        .map_err(|e| format!("Failed to remove existing file '{}' before move: {}", destination_path.display(), e))?;
-                } else if destination_path.is_dir() {
-                    fs::remove_dir_all(&destination_path)
-                        .map_err(|e| format!("Failed to remove existing directory '{}' before move: {}", destination_path.display(), e))?;
-                }
-            }
+    let mut remaining: Vec<PathBuf> = paths.clone();
+    for (source_path, destination_path) in &plan {
+        if destination_path.symlink_metadata().is_ok() {
+            config.print_normal(&format!("Overwriting existing item: {}", destination_path.display()));
         }
 
-        fs::rename(source_path, &destination_path)
-            .map_err(|e| format!(
-                "Failed to move '{}' to '{}': {}",
+        if let Err(e) = place(mode, source_path, destination_path, config) {
+            // Keep only what has not been transferred, so a retry picks up where this left off.
+            selection_store::replace_selected_paths(&remaining)?;
+            return Err(format!(
+                "Failed to {} '{}' to '{}': {}\nItems not yet transferred remain selected.",
+                mode.verb(),
                 source_path.display(),
                 destination_path.display(),
                 e
-            ))?;
+            ));
+        }
 
-        config.print_normal(&format!("Moved '{}' to '{}'", source_path.display(), destination_path.display()));
+        remaining.retain(|p| p != source_path);
+        selection_store::replace_selected_paths(&remaining)?;
+        config.print_normal(&format!("{} '{}' to '{}'", mode.past(), source_path.display(), destination_path.display()));
     }
 
-    selection_store::clear_selection_file()?;
-    config.print_normal("Move complete. Selection cleared.");
+    config.print_normal(&format!("{} complete. Selection cleared.", mode.noun()));
     Ok(())
+}
+
+/// Pairs each selected source with its destination, refusing anything that
+/// would fail midway or destroy data.
+fn plan_transfer(paths: &[PathBuf], current_dir: &Path, force: bool) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    let mut problems = Vec::new();
+    let mut conflicts = Vec::new();
+    let mut by_name: HashMap<&std::ffi::OsStr, &PathBuf> = HashMap::new();
+    let mut plan = Vec::new();
+
+    for source_path in paths {
+        let Some(file_name) = source_path.file_name() else {
+            problems.push(format!("'{}' has no file name", source_path.display()));
+            continue;
+        };
+        if source_path.symlink_metadata().is_err() {
+            problems.push(format!("'{}' no longer exists", source_path.display()));
+            continue;
+        }
+        if let Some(other) = by_name.insert(file_name, source_path) {
+            problems.push(format!(
+                "'{}' and '{}' would both be placed at '{}'",
+                other.display(),
+                source_path.display(),
+                current_dir.join(file_name).display()
+            ));
+            continue;
+        }
+
+        let destination_path = current_dir.join(file_name);
+        if destination_path == *source_path {
+            problems.push(format!("'{}' is already in the current directory", source_path.display()));
+            continue;
+        }
+        if current_dir.starts_with(source_path) {
+            problems.push(format!(
+                "cannot place '{}' inside itself (current directory is within it)",
+                source_path.display()
+            ));
+            continue;
+        }
+        if source_path.starts_with(&destination_path) {
+            problems.push(format!(
+                "'{}' is inside '{}', which it would replace",
+                source_path.display(),
+                destination_path.display()
+            ));
+            continue;
+        }
+        if destination_path.symlink_metadata().is_ok() && !force {
+            conflicts.push(format!("'{}'", destination_path.display()));
+        }
+        plan.push((source_path.clone(), destination_path));
+    }
+
+    for (i, (a, _)) in plan.iter().enumerate() {
+        for (b, _) in &plan[i + 1..] {
+            if a.starts_with(b) || b.starts_with(a) {
+                problems.push(format!(
+                    "'{}' and '{}' are both selected but one contains the other",
+                    a.display(),
+                    b.display()
+                ));
+            }
+        }
+    }
+
+    if !problems.is_empty() {
+        return Err(format!(
+            "Nothing was transferred:\n  {}\nAdjust the selection (see 'ferry list') and try again.",
+            problems.join("\n  ")
+        ));
+    }
+    if !conflicts.is_empty() {
+        return Err(format!(
+            "Nothing was transferred. These destinations already exist (use --force to overwrite):\n  {}",
+            conflicts.join("\n  ")
+        ));
+    }
+    Ok(plan)
+}
+
+/// Copies or moves `source` to `destination`. An existing destination is set
+/// aside first and only deleted once the new item is in place, so a failure
+/// never loses it.
+fn place(mode: Mode, source: &Path, destination: &Path, config: &Config) -> io::Result<()> {
+    let backup = if destination.symlink_metadata().is_ok() {
+        let backup = backup_path(destination);
+        fs::rename(destination, &backup)?;
+        Some(backup)
+    } else {
+        None
+    };
+
+    let result = match mode {
+        Mode::Copy => copy_item(source, destination),
+        Mode::Move => move_item(source, destination),
+    };
+
+    match (result, backup) {
+        (Ok(()), Some(backup)) => {
+            // The transfer itself succeeded; a leftover backup is only worth a warning.
+            if let Err(e) = remove_item(&backup) {
+                config.print_warning(&format!(
+                    "Could not remove the replaced item, left at '{}': {}",
+                    backup.display(),
+                    e
+                ));
+            }
+            Ok(())
+        }
+        (Ok(()), None) => Ok(()),
+        (Err(e), backup) => {
+            // Clean up any partial result, then put the original back.
+            if destination.symlink_metadata().is_ok() && source.symlink_metadata().is_ok() {
+                let _ = remove_item(destination);
+            }
+            if let Some(backup) = backup {
+                let _ = fs::rename(&backup, destination);
+            }
+            Err(e)
+        }
+    }
+}
+
+fn backup_path(destination: &Path) -> PathBuf {
+    let name = destination.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let parent = destination.parent().unwrap_or(Path::new("."));
+    let mut n = 0u32;
+    loop {
+        let candidate = parent.join(format!(".{}.ferry-old-{}-{}", name, std::process::id(), n));
+        if candidate.symlink_metadata().is_err() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+fn copy_item(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::copy(source, destination).map(|_| ())
+}
+
+fn move_item(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(source, destination)
+}
+
+fn remove_item(path: &Path) -> io::Result<()> {
+    if path.symlink_metadata()?.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
 }
 
 pub fn handle_list_command(_absolute: bool, relative: bool, config: &Config) -> Result<(), String> {
@@ -112,7 +262,7 @@ pub fn handle_list_command(_absolute: bool, relative: bool, config: &Config) -> 
         for path in paths {
             let display_path = if relative {
                 path.strip_prefix(&current_dir)
-                    .unwrap_or(&path) 
+                    .unwrap_or(&path)
                     .display()
                     .to_string()
             } else {

@@ -24,18 +24,27 @@ pub fn get_selection_file_path() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Adds `new_paths` to the stored selection, skipping ones already present.
 pub fn write_selected_paths(new_paths: &[PathBuf]) -> Result<(), String> {
-    let file_path = get_selection_file_path()?;
     let mut existing_paths = read_selected_paths()?;
     for new_path in new_paths {
         if !existing_paths.contains(new_path) {
             existing_paths.push(new_path.clone());
         }
     }
+    replace_selected_paths(&existing_paths)
+}
 
-    let content: Vec<String> = existing_paths.iter()
-                                               .filter_map(|p| p.to_str().map(|s| s.to_string()))
-                                               .collect();
+/// Overwrites the stored selection with exactly `paths`. An empty list clears it.
+pub fn replace_selected_paths(paths: &[PathBuf]) -> Result<(), String> {
+    if paths.is_empty() {
+        return clear_selection_file();
+    }
+    let file_path = get_selection_file_path()?;
+
+    let content: Vec<String> = paths.iter()
+                                    .filter_map(|p| p.to_str().map(|s| s.to_string()))
+                                    .collect();
 
     fs::write(&file_path, content.join("\n"))
         .map_err(|e| format!("Failed to write selection to {}: {}", file_path.display(), e))
