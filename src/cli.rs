@@ -18,48 +18,48 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Select files for copying or moving
+    /// Add files or directories to the selection for copying or moving.
+    /// With no items or --regex, opens the interactive picker.
     Select {
-        /// Paths to items to select directly (shell-globbed).
-        /// These are positional arguments. They are ignored if --regex or --interactive is used.
+        /// Files or directories to select (shell globs are expanded by your shell).
+        #[arg(conflicts_with_all = ["regex", "interactive", "path"])]
         items: Vec<PathBuf>,
 
         /// Select files by regular expression, searching --path recursively.
         /// The pattern is matched against each file's path relative to --path,
         /// using '/' as separator (e.g. "^doc_\d{3}\.pdf$" or "^src/.*\.rs$").
         #[arg(long, conflicts_with = "interactive")]
-        regex: Option<String>, 
+        regex: Option<String>,
 
-        /// Launch an interactive Text User Interface (TUI) for selection.
-        /// This activates TUI mode.
+        /// Pick items in an interactive terminal UI (the default with no items).
         #[arg(short = 'i', long)]
-        interactive: bool, 
+        interactive: bool,
 
-        /// Specify the starting directory for the regex search or interactive TUI.
-        /// Defaults to the current working directory.
+        /// Directory to search with --regex or browse in the picker.
+        /// Defaults to the current directory.
         #[arg(short = 'P', long)]
         path: Option<PathBuf>,
 
-        /// Perform a dry run: show what would be selected without saving to the selection file.
+        /// Show what would be selected without changing the selection.
         #[arg(long)]
-        dry_run: bool, 
+        dry_run: bool,
     },
-    /// Copy previously selected items to the current directory
+    /// Copy the selected items into the current directory and clear the selection
     Copy {
-        /// Overwrite existing files without prompting.
+        /// Replace items that already exist in the current directory.
         #[arg(short = 'f', long)]
-        force: bool, 
+        force: bool,
     },
-    /// Move previously selected items to the current directory
+    /// Move the selected items into the current directory and clear the selection
     Move {
-        /// Overwrite existing files without prompting.
+        /// Replace items that already exist in the current directory.
         #[arg(short = 'f', long)]
-        force: bool, 
+        force: bool,
     },
-    /// List currently selected files
+    /// List the selected items
     List {
-        /// Display paths as absolute paths (default).
-        #[arg(long, default_value_t = false, conflicts_with = "relative")]
+        /// Display absolute paths. This is the default.
+        #[arg(long, default_value_t = false, conflicts_with = "relative", hide = true)]
         absolute: bool,
 
         /// Display paths relative to the current working directory.

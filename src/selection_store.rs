@@ -25,14 +25,16 @@ pub fn get_selection_file_path() -> Result<PathBuf, String> {
 }
 
 /// Adds `new_paths` to the stored selection, skipping ones already present.
-pub fn write_selected_paths(new_paths: &[PathBuf]) -> Result<(), String> {
+/// Returns the size of the resulting selection.
+pub fn write_selected_paths(new_paths: &[PathBuf]) -> Result<usize, String> {
     let mut existing_paths = read_selected_paths()?;
     for new_path in new_paths {
         if !existing_paths.contains(new_path) {
             existing_paths.push(new_path.clone());
         }
     }
-    replace_selected_paths(&existing_paths)
+    replace_selected_paths(&existing_paths)?;
+    Ok(existing_paths.len())
 }
 
 /// Overwrites the stored selection with exactly `paths`. An empty list clears it.
