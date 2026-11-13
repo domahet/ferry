@@ -27,6 +27,12 @@ fn main() {
         Commands::List { absolute, relative } => {
             operations::handle_list_command(absolute, relative, &config)
         }
+        Commands::Deselect { items, missing } => {
+            operations::handle_deselect_command(&items, missing, &config)
+        }
+        Commands::Clear => {
+            operations::handle_clear_command(&config)
+        }
     };
 
     if let Err(e) = result {

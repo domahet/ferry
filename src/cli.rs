@@ -66,4 +66,16 @@ pub enum Commands {
         #[arg(long, default_value_t = false, conflicts_with = "absolute")]
         relative: bool,
     },
+    /// Remove items from the selection without copying or moving them
+    Deselect {
+        /// Paths of selected items to remove. They do not need to exist anymore.
+        #[arg(required_unless_present = "missing")]
+        items: Vec<PathBuf>,
+
+        /// Remove every selected item that no longer exists.
+        #[arg(long)]
+        missing: bool,
+    },
+    /// Clear the whole selection
+    Clear,
 }

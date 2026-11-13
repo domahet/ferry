@@ -165,7 +165,7 @@ fn plan_transfer(paths: &[PathBuf], current_dir: &Path, force: bool) -> Result<V
 
     if !problems.is_empty() {
         return Err(format!(
-            "Nothing was transferred:\n  {}\nAdjust the selection (see 'ferry list') and try again.",
+            "Nothing was transferred:\n  {}\nAdjust the selection ('ferry list', 'ferry deselect') and try again.",
             problems.join("\n  ")
         ));
     }
@@ -309,22 +309,80 @@ pub fn handle_list_command(_absolute: bool, relative: bool, config: &Config) -> 
 
     if paths.is_empty() {
         config.print_normal("No files currently selected.");
-    } else {
-        config.print_normal("Currently selected files:");
-        let current_dir = std::env::current_dir()
-            .map_err(|e| format!("Failed to get current directory: {}", e))?;
+        return Ok(());
+    }
 
-        for path in paths {
-            let display_path = if relative {
-                path.strip_prefix(&current_dir)
-                    .unwrap_or(&path)
-                    .display()
-                    .to_string()
-            } else {
-                path.display().to_string()
-            };
-            config.print_normal(&format!("  {}", display_path));
-        }
+    config.print_normal("Currently selected files:");
+    let current_dir = std::env::current_dir()
+        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let current_dir = current_dir.canonicalize().unwrap_or(current_dir);
+
+    for path in paths {
+        let display_path = if relative {
+            path.strip_prefix(&current_dir).unwrap_or(&path)
+        } else {
+            &path
+        };
+        let note = if path.symlink_metadata().is_err() { "  (missing)" } else { "" };
+        config.print_normal(&format!("  {}{}", display_path.display(), note));
     }
     Ok(())
+}
+
+pub fn handle_deselect_command(items: &[PathBuf], missing: bool, config: &Config) -> Result<(), String> {
+    let mut paths = selection_store::read_selected_paths()?;
+    let before = paths.len();
+
+    let current_dir = std::env::current_dir()
+        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    for item in items {
+        // Selected paths are canonical; an item that no longer exists can only
+        // be matched by its normalized absolute form.
+        let target = current_dir.join(item);
+        let target = target.canonicalize().unwrap_or_else(|_| normalize(&target));
+        if paths.contains(&target) {
+            paths.retain(|p| *p != target);
+            config.print_verbose(&format!("Deselected '{}'", target.display()));
+        } else {
+            config.print_warning(&format!("'{}' is not selected", target.display()));
+        }
+    }
+    if missing {
+        paths.retain(|p| {
+            let exists = p.symlink_metadata().is_ok();
+            if !exists {
+                config.print_verbose(&format!("Deselected missing '{}'", p.display()));
+            }
+            exists
+        });
+    }
+
+    selection_store::replace_selected_paths(&paths)?;
+    config.print_normal(&format!(
+        "Deselected {}; {} remaining.",
+        plural(before - paths.len(), "item"),
+        paths.len()
+    ));
+    Ok(())
+}
+
+pub fn handle_clear_command(config: &Config) -> Result<(), String> {
+    selection_store::clear_selection_file()?;
+    config.print_normal("Selection cleared.");
+    Ok(())
+}
+
+/// Resolves '.' and '..' without touching the filesystem.
+fn normalize(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                result.pop();
+            }
+            other => result.push(other),
+        }
+    }
+    result
 }
