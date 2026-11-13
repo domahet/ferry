@@ -8,6 +8,13 @@ const APP_NAME: &str = "ferry";
 const SELECTION_FILE_NAME: &str = "selection";
 
 fn get_ferry_data_dir() -> Result<PathBuf, String> {
+    // Lets tests (and users who want a different location) isolate the selection.
+    if let Some(dir) = std::env::var_os("FERRY_CACHE_DIR").filter(|d| !d.is_empty()) {
+        let dir = PathBuf::from(dir);
+        fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create cache directory {}: {}", dir.display(), e))?;
+        return Ok(dir);
+    }
     if let Some(proj_dirs) = ProjectDirs::from(APP_QUALIFIER, APP_ORGANIZATION, APP_NAME) {
         let cache_dir = proj_dirs.cache_dir().to_path_buf();
         fs::create_dir_all(&cache_dir)

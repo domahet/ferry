@@ -80,3 +80,5 @@ ferry clear                 # remove everything
 ### Global options
 
 `--verbose` prints more detail, and `--silent` prints only errors.
+
+The selection is kept in your user cache directory. Set `FERRY_CACHE_DIR` to keep it somewhere else.
