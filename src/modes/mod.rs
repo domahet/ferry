@@ -23,7 +23,13 @@ pub fn handle_select_command(
         config.print_verbose(&format!("Selecting files matching '{}' in {}", regex_pattern, start_path.display()));
         explicit::run_regex_selection(&start_path, &regex_pattern, config)?
     } else if interactive || items.is_empty() {
-        interactive::run_tui_selection(&start_path, config)?
+        match interactive::run_tui_selection(&start_path, config)? {
+            Some(paths) => paths,
+            None => {
+                config.print_normal("Cancelled. Selection unchanged.");
+                return Ok(());
+            }
+        }
     } else {
         explicit::validate_and_canonicalize_items(&items, config)?
     };
