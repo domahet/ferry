@@ -23,8 +23,9 @@ pub enum Commands {
         /// These are positional arguments. They are ignored if --regex or --interactive is used.
         items: Vec<String>, 
 
-        /// Select items by regular expression (e.g., "^doc_\\d{3}\\.pdf$")
-        /// This activates regex search mode.
+        /// Select files by regular expression, searching --path recursively.
+        /// The pattern is matched against each file's path relative to --path,
+        /// using '/' as separator (e.g. "^doc_\d{3}\.pdf$" or "^src/.*\.rs$").
         #[arg(long, conflicts_with = "interactive")]
         regex: Option<String>, 
 
