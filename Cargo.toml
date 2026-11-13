@@ -2,8 +2,9 @@
 name = "ferry"
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.85"
 description = "A ferry for your files. Grab them from a directory, move to somewhere else, and then drop them, instead of the traditional cp/mv workflow of specifying paths ahead of the time."
-repository = "https://github.com/domahet/playedtogether/"
+repository = "https://github.com/domahet/ferry"
 license = "MIT"
 categories = ["command-line-utilities"]
 
