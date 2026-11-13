@@ -192,7 +192,7 @@ fn place(mode: Mode, source: &Path, destination: &Path, config: &Config) -> io::
 
     let result = match mode {
         Mode::Copy => copy_item(source, destination),
-        Mode::Move => move_item(source, destination),
+        Mode::Move => move_item(source, destination, config),
     };
 
     match (result, backup) {
@@ -275,8 +275,25 @@ fn copy_symlink(source: &Path, target: &Path) -> io::Result<()> {
     copy_item(source, target)
 }
 
-fn move_item(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(source, destination)
+fn move_item(source: &Path, destination: &Path, config: &Config) -> io::Result<()> {
+    match fs::rename(source, destination) {
+        // rename cannot cross filesystems; copy, then remove the original.
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
+            copy_item(source, destination)?;
+            // The data is safely at the destination now, so failing to remove
+            // the original must not undo the move (it may be partly removed).
+            if let Err(e) = remove_item(source) {
+                config.print_warning(&format!(
+                    "Moved to '{}', but could not fully remove the original '{}': {}",
+                    destination.display(),
+                    source.display(),
+                    e
+                ));
+            }
+            Ok(())
+        }
+        result => result,
+    }
 }
 
 fn remove_item(path: &Path) -> io::Result<()> {
