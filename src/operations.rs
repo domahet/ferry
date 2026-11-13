@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 use crate::config::Config;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -233,8 +234,45 @@ fn backup_path(destination: &Path) -> PathBuf {
     }
 }
 
+/// Copies a file, or a directory and everything in it. Symlinks inside a
+/// directory are recreated as symlinks rather than followed.
 fn copy_item(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::copy(source, destination).map(|_| ())
+    if !fs::metadata(source)?.is_dir() {
+        return fs::copy(source, destination).map(|_| ());
+    }
+
+    // Directory permissions are applied last so a read-only directory can still be filled.
+    let mut directory_permissions = Vec::new();
+    for entry in WalkDir::new(source) {
+        let entry = entry.map_err(io::Error::other)?;
+        let relative = entry.path().strip_prefix(source).map_err(io::Error::other)?;
+        let target = destination.join(relative);
+        let file_type = entry.file_type();
+
+        if file_type.is_dir() {
+            fs::create_dir(&target)?;
+            directory_permissions.push((target, entry.metadata().map_err(io::Error::other)?.permissions()));
+        } else if file_type.is_symlink() {
+            copy_symlink(entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    for (directory, permissions) in directory_permissions.into_iter().rev() {
+        fs::set_permissions(directory, permissions)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn copy_symlink(source: &Path, target: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(fs::read_link(source)?, target)
+}
+
+#[cfg(not(unix))]
+fn copy_symlink(source: &Path, target: &Path) -> io::Result<()> {
+    // Creating symlinks needs extra privileges on Windows; copy what it points to.
+    copy_item(source, target)
 }
 
 fn move_item(source: &Path, destination: &Path) -> io::Result<()> {
