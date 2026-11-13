@@ -1,179 +1,166 @@
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
 use std::io;
-use crossterm::{
-    event::{self, Event, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use std::path::{Path, PathBuf};
 use ratatui::{
-    backend::CrosstermBackend,
-    widgets::{ListItem, List, Block, Borders},
-    Terminal,
+    crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    layout::{Constraint, Layout},
+    style::{Modifier, Style},
+    text::Line,
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    DefaultTerminal,
 };
-use walkdir::WalkDir;
 use crate::config::Config;
 
-struct TuiState {
-    items: Vec<PathBuf>,
-    selected_indices: Vec<usize>,
-    current_scroll_index: usize,
-    scroll_offset: usize,
-    terminal_height: usize,
+const HELP: &str = "↑/↓ j/k move · PgUp/PgDn · Home/End · Space toggle · a all/none · Enter confirm · q/Esc cancel";
+
+struct Entry {
+    path: PathBuf,
+    label: String,
 }
 
-impl TuiState {
-    fn new(items: Vec<PathBuf>, terminal_height: u16) -> Self {
-        TuiState {
-            items,
-            selected_indices: Vec::new(),
-            current_scroll_index: 0,
-            scroll_offset: 0,
-            terminal_height: terminal_height as usize,
+struct Picker {
+    entries: Vec<Entry>,
+    selected: BTreeSet<usize>,
+    cursor: usize,
+    list_state: ListState,
+    page_height: usize,
+}
+
+impl Picker {
+    fn new(entries: Vec<Entry>) -> Self {
+        Picker {
+            entries,
+            selected: BTreeSet::new(),
+            cursor: 0,
+            list_state: ListState::default().with_selected(Some(0)),
+            page_height: 1,
         }
     }
 
-    fn toggle_selection(&mut self) {
-        if self.items.is_empty() {
-            return;
+    fn move_cursor(&mut self, delta: isize) {
+        let last = self.entries.len().saturating_sub(1);
+        self.cursor = self.cursor.saturating_add_signed(delta).min(last);
+        self.list_state.select(Some(self.cursor));
+    }
+
+    fn toggle(&mut self) {
+        if !self.selected.remove(&self.cursor) {
+            self.selected.insert(self.cursor);
         }
-        let index = self.current_scroll_index;
-        if let Some(pos) = self.selected_indices.iter().position(|&i| i == index) {
-            self.selected_indices.remove(pos);
+    }
+
+    fn toggle_all(&mut self) {
+        if self.selected.len() == self.entries.len() {
+            self.selected.clear();
         } else {
-            self.selected_indices.push(index);
-            self.selected_indices.sort_unstable();
+            self.selected = (0..self.entries.len()).collect();
         }
     }
 
-    fn move_up(&mut self) {
-        if self.current_scroll_index > 0 {
-            self.current_scroll_index -= 1;
-            if self.current_scroll_index < self.scroll_offset {
-                self.scroll_offset -= 1;
-            }
-        }
-    }
-
-    fn move_down(&mut self) {
-        if self.current_scroll_index < self.items.len().saturating_sub(1) {
-            self.current_scroll_index += 1;
-            let visible_height = self.terminal_height.saturating_sub(2);
-            if self.current_scroll_index >= self.scroll_offset + visible_height {
-                self.scroll_offset += 1;
-            }
-        }
-    }
-
-    fn get_selected_paths(&self) -> Vec<PathBuf> {
-        self.selected_indices.iter()
-            .filter_map(|&i| self.items.get(i).cloned())
-            .collect()
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        self.selected.iter().map(|&i| self.entries[i].path.clone()).collect()
     }
 }
 
-pub fn run_tui_selection(start_path: &Path, config: &Config) -> Result<Vec<PathBuf>, String> {
+/// Lets the user pick files and directories directly inside `start_path`.
+/// Returns `None` if the picker was cancelled.
+pub fn run_tui_selection(start_path: &Path, config: &Config) -> Result<Option<Vec<PathBuf>>, String> {
+    // Selections are consumed from other directories, so they must be absolute.
+    let start_path = start_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve '{}': {}", start_path.display(), e))?;
 
-    let all_files = WalkDir::new(start_path)
-        .max_depth(1) 
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file() && e.path() != start_path) 
-        .map(|e| e.path().to_path_buf())
-        .collect::<Vec<PathBuf>>();
-
-    if all_files.is_empty() {
-        config.print_normal(&format!("No files found in '{}' for TUI selection.", start_path.display()));
-        return Ok(Vec::new());
+    let entries = list_entries(&start_path)?;
+    if entries.is_empty() {
+        config.print_normal(&format!("Nothing to select in '{}'.", start_path.display()));
+        return Ok(Some(Vec::new()));
     }
 
-    // Setup terminal
-    enable_raw_mode().map_err(|e| format!("Failed to enable raw mode: {}", e))?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).map_err(|e| format!("Failed to enter alternate screen: {}", e))?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).map_err(|e| format!("Failed to create terminal: {}", e))?;
-
-    let initial_height = terminal.size().map_err(|e| format!("Failed to get terminal size: {}", e))?.height;
-    let mut app_state = TuiState::new(all_files, initial_height);
-
-    let result = run_app(&mut terminal, &mut app_state);
-
-    // Restore terminal
-    disable_raw_mode().map_err(|e| format!("Failed to disable raw mode: {}", e))?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen).map_err(|e| format!("Failed to leave alternate screen: {}", e))?;
-    terminal.show_cursor().map_err(|e| format!("Failed to show cursor: {}", e))?;
+    // try_init also installs a panic hook that restores the terminal.
+    let mut terminal = ratatui::try_init().map_err(|e| format!("Failed to start the terminal UI: {}", e))?;
+    let mut picker = Picker::new(entries);
+    let result = run(&mut terminal, &mut picker, &start_path);
+    ratatui::try_restore().map_err(|e| format!("Failed to restore the terminal: {}", e))?;
 
     match result {
-        Ok(_) => Ok(app_state.get_selected_paths()),
-        Err(e) => Err(e.to_string()),
+        Ok(true) => Ok(Some(picker.selected_paths())),
+        Ok(false) => Ok(None),
+        Err(e) => Err(format!("Terminal UI error: {}", e)),
     }
 }
 
-fn run_app<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    app_state: &mut TuiState,
-) -> io::Result<()> {
-    loop {
-        terminal.draw(|f| {
-            let size = f.area();
-            app_state.terminal_height = size.height as usize;
+fn list_entries(start_path: &Path) -> Result<Vec<Entry>, String> {
+    let read_dir = std::fs::read_dir(start_path)
+        .map_err(|e| format!("Failed to read '{}': {}", start_path.display(), e))?;
 
-            let mut list_items: Vec<ListItem> = Vec::new();
-            let visible_height = app_state.terminal_height.saturating_sub(2);
-            let visible_start = app_state.scroll_offset;
-            let visible_end = (app_state.scroll_offset + visible_height).min(app_state.items.len());
-
-            for i in visible_start..visible_end {
-                if let Some(path) = app_state.items.get(i) {
-                    let mut _s = path.display().to_string();
-                    if let Some(stripped_path) = path.strip_prefix(app_state.items[0].parent().unwrap_or(path))
-                        .ok().and_then(|p| if p.as_os_str().is_empty() { None } else { Some(p) }) {
-                        _s = stripped_path.display().to_string();
-                    } else { 
-                        _s = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned();
-                    }
-
-                    if app_state.selected_indices.contains(&i) {
-                        _s = format!("[x] {}", _s);
-                    } else {
-                        _s = format!("[ ] {}", _s);
-                    }
-                    if i == app_state.current_scroll_index {
-                        _s = format!("> {}", _s);
-                    } else {
-                        _s = format!("  {}", _s);
-                    }
-                    list_items.push(ListItem::new(_s));
-                }
+    let mut entries: Vec<(bool, Entry)> = read_dir
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let is_dir = e.path().is_dir();
+            let mut label = e.file_name().to_string_lossy().into_owned();
+            if is_dir {
+                label.push('/');
             }
+            (is_dir, Entry { path: e.path(), label })
+        })
+        .collect();
+    // Directories first, then case-insensitive by name.
+    entries.sort_by_cached_key(|(is_dir, entry)| (!is_dir, entry.label.to_lowercase()));
+    Ok(entries.into_iter().map(|(_, entry)| entry).collect())
+}
 
-            let list_widget = List::new(list_items)
-                .block(Block::default().borders(Borders::ALL).title("Select Files (Space: toggle, Enter: confirm, q: quit)"))
-                .highlight_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan));
+/// Returns Ok(true) when confirmed, Ok(false) when cancelled.
+fn run(terminal: &mut DefaultTerminal, picker: &mut Picker, start_path: &Path) -> io::Result<bool> {
+    loop {
+        terminal.draw(|frame| {
+            let [list_area, help_area] =
+                Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(frame.area());
+            picker.page_height = list_area.height.saturating_sub(2).max(1) as usize;
 
-            f.render_widget(list_widget, size);
+            let items: Vec<ListItem> = picker
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(i, entry)| {
+                    let mark = if picker.selected.contains(&i) { "[x]" } else { "[ ]" };
+                    ListItem::new(format!("{} {}", mark, entry.label))
+                })
+                .collect();
+
+            let title = format!(
+                " {} — {} of {} selected ",
+                start_path.display(),
+                picker.selected.len(),
+                picker.entries.len()
+            );
+            let list = List::new(items)
+                .block(Block::default().borders(Borders::ALL).title(Line::from(title)))
+                .highlight_symbol("> ")
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+
+            frame.render_stateful_widget(list, list_area, &mut picker.list_state);
+            frame.render_widget(Paragraph::new(HELP), help_area);
         })?;
 
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
-                    break;
-                }
-                KeyCode::Up => {
-                    app_state.move_up();
-                }
-                KeyCode::Down => {
-                    app_state.move_down();
-                }
-                KeyCode::Char(' ') => {
-                    app_state.toggle_selection();
-                }
-                KeyCode::Enter => {
-                    break;
-                }
-                _ => {}
-            }
+        let Event::Key(key) = event::read()? else { continue };
+        // Windows also reports key releases; act on presses only.
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        let page = picker.page_height as isize;
+        match key.code {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(false),
+            KeyCode::Char('q') | KeyCode::Esc => return Ok(false),
+            KeyCode::Enter => return Ok(true),
+            KeyCode::Up | KeyCode::Char('k') => picker.move_cursor(-1),
+            KeyCode::Down | KeyCode::Char('j') => picker.move_cursor(1),
+            KeyCode::PageUp => picker.move_cursor(-page),
+            KeyCode::PageDown => picker.move_cursor(page),
+            KeyCode::Home | KeyCode::Char('g') => picker.move_cursor(isize::MIN),
+            KeyCode::End | KeyCode::Char('G') => picker.move_cursor(isize::MAX),
+            KeyCode::Char(' ') => picker.toggle(),
+            KeyCode::Char('a') => picker.toggle_all(),
+            _ => {}
         }
     }
-    Ok(())
 }
