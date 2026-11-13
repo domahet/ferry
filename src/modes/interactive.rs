@@ -72,6 +72,10 @@ impl TuiState {
 }
 
 pub fn run_tui_selection(start_path: &Path, config: &Config) -> Result<Vec<PathBuf>, String> {
+    // Selections are consumed from other directories, so they must be absolute.
+    let start_path = &start_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve '{}': {}", start_path.display(), e))?;
 
     let all_files = WalkDir::new(start_path)
         .max_depth(1) 
