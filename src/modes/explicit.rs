@@ -37,12 +37,11 @@ pub fn run_regex_selection(start_path: &Path, pattern_str: &str, config: &Config
     Ok(selected_paths)
 }
 
-pub fn validate_and_canonicalize_items(item_strs: &[String], config: &Config) -> Result<Vec<PathBuf>, String> {
+pub fn validate_and_canonicalize_items(items: &[PathBuf], config: &Config) -> Result<Vec<PathBuf>, String> {
     let mut selected_paths = Vec::new();
-    for p_str in item_strs {
-        let path = PathBuf::from(p_str);
+    for path in items {
         config.print_verbose(&format!("Attempting to canonicalize: '{}'", path.display()));
-        if let Some(abs_path) = fs_helpers::canonicalize_path(&path, config)? { // Pass config
+        if let Some(abs_path) = fs_helpers::canonicalize_path(path, config)? {
             config.print_verbose(&format!("Successfully canonicalized to: '{}'", abs_path.display()));
             selected_paths.push(abs_path);
         }

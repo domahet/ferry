@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::fs;
 use directories::ProjectDirs;
 
@@ -36,17 +36,22 @@ pub fn write_selected_paths(new_paths: &[PathBuf]) -> Result<(), String> {
 }
 
 /// Overwrites the stored selection with exactly `paths`. An empty list clears it.
+///
+/// Each path is written followed by a NUL byte, the one byte that cannot occur
+/// in a path, so names containing newlines survive.
 pub fn replace_selected_paths(paths: &[PathBuf]) -> Result<(), String> {
     if paths.is_empty() {
         return clear_selection_file();
     }
     let file_path = get_selection_file_path()?;
 
-    let content: Vec<String> = paths.iter()
-                                    .filter_map(|p| p.to_str().map(|s| s.to_string()))
-                                    .collect();
+    let mut content = Vec::new();
+    for path in paths {
+        content.extend_from_slice(&path_to_bytes(path)?);
+        content.push(0);
+    }
 
-    fs::write(&file_path, content.join("\n"))
+    fs::write(&file_path, content)
         .map_err(|e| format!("Failed to write selection to {}: {}", file_path.display(), e))
 }
 
@@ -55,9 +60,42 @@ pub fn read_selected_paths() -> Result<Vec<PathBuf>, String> {
     if !file_path.exists() {
         return Ok(Vec::new());
     }
-    let content = fs::read_to_string(&file_path)
+    let content = fs::read(&file_path)
         .map_err(|e| format!("Failed to read selection from {}: {}", file_path.display(), e))?;
-    Ok(content.lines().map(PathBuf::from).collect())
+
+    // Selections written by older versions are newline-separated and contain no NUL.
+    let separator = if content.contains(&0) { 0 } else { b'\n' };
+    content
+        .split(|&b| b == separator)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| bytes_to_path(entry, &file_path))
+        .collect()
+}
+
+#[cfg(unix)]
+fn path_to_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    use std::os::unix::ffi::OsStrExt;
+    Ok(path.as_os_str().as_bytes().to_vec())
+}
+
+#[cfg(not(unix))]
+fn path_to_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    path.to_str()
+        .map(|s| s.as_bytes().to_vec())
+        .ok_or_else(|| format!("Cannot store path '{}': it is not valid Unicode", path.display()))
+}
+
+#[cfg(unix)]
+fn bytes_to_path(bytes: &[u8], _file_path: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::ffi::OsStrExt;
+    Ok(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+#[cfg(not(unix))]
+fn bytes_to_path(bytes: &[u8], file_path: &Path) -> Result<PathBuf, String> {
+    std::str::from_utf8(bytes)
+        .map(PathBuf::from)
+        .map_err(|_| format!("Selection file {} is corrupt", file_path.display()))
 }
 
 pub fn clear_selection_file() -> Result<(), String> {

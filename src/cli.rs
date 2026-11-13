@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author = "domahet", version, about = "A ferry for your files", long_about = None)]
@@ -21,7 +22,7 @@ pub enum Commands {
     Select {
         /// Paths to items to select directly (shell-globbed).
         /// These are positional arguments. They are ignored if --regex or --interactive is used.
-        items: Vec<String>, 
+        items: Vec<PathBuf>,
 
         /// Select files by regular expression, searching --path recursively.
         /// The pattern is matched against each file's path relative to --path,
@@ -37,7 +38,7 @@ pub enum Commands {
         /// Specify the starting directory for the regex search or interactive TUI.
         /// Defaults to the current working directory.
         #[arg(short = 'P', long)]
-        path: Option<String>, 
+        path: Option<PathBuf>,
 
         /// Perform a dry run: show what would be selected without saving to the selection file.
         #[arg(long)]

@@ -6,15 +6,15 @@ use super::selection_store;
 use crate::config::Config;
 
 pub fn handle_select_command(
-    items: Vec<String>,
+    items: Vec<PathBuf>,
     regex: Option<String>,
     interactive: bool,
-    path: Option<String>,
+    path: Option<PathBuf>,
     dry_run: bool,
     config: &Config,
 ) -> Result<(), String> {
-    let resolved_start_path = path.as_deref().unwrap_or(".").to_string();
-    let start_path_buf = PathBuf::from(&resolved_start_path);
+    let start_path_buf = path.clone().unwrap_or_else(|| PathBuf::from("."));
+    let resolved_start_path = start_path_buf.display();
 
     if path.is_some() && !start_path_buf.is_dir() {
         config.print_error(&format!("The specified --path '{}' is not a valid directory.", resolved_start_path));
